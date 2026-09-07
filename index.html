@@ -519,10 +519,16 @@
     <div id="profile-screen" class="profile-screen">
         <div class="profile-container">
             <div class="logo">NERV</div>
-            <div class="profile-title">IDENTIFICACIÓN DE PILOTO</div>
-            <div class="profile-sub">MAGI // SELECCIONE SU PERFIL PARA ACCEDER AL SISTEMA DE HORARIOS</div>
+            <div class="profile-title">SISTEMA MAGI // IDENTIFICACIÓN DE TERMINAL</div>
+            <div class="profile-sub">SELECCIONE QUÉ PILOTO UTILIZARÁ ESTE DISPOSITIVO</div>
+            <div class="profile-hint" style="font-size: 12px; color: var(--magi-green); border: 1px dashed rgba(0, 255, 65, 0.4); padding: 12px 16px; margin-bottom: 22px; background: rgba(0, 255, 65, 0.04); line-height: 1.5; text-align: center;">
+                ◈ Cada dispositivo recordará su selección permanentemente para ingresar directo en futuras sesiones.
+            </div>
             <div id="profile-cards" class="profile-cards"></div>
-            <button class="btn btn-green" onclick="openUserModal()">+ REGISTRAR NUEVO PILOTO</button>
+            <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                <button class="btn btn-green" onclick="openUserModal()">+ REGISTRAR NUEVO PILOTO</button>
+                <button class="btn" id="btn-cancel-switch" style="display:none;" onclick="cancelSwitchUser()">← VOLVER A MI HORARIO</button>
+            </div>
         </div>
     </div>
 
@@ -535,7 +541,7 @@
                     <div>
                         <div class="header-title">MAGI // HORARIO OPERATIVO</div>
                         <div class="header-subtitle">NERV // SISTEMA MAGI ● EN LÍNEA</div>
-                        <div class="header-subtitle" id="user-tag">PILOTO: ---</div>
+                        <div class="header-subtitle" id="user-tag">DISPOSITIVO: ---</div>
                     </div>
                 </div>
                 <div class="system-status">
@@ -552,7 +558,7 @@
                 <select id="user-select" onchange="changeViewUser(this.value)"></select>
                 <button class="btn" onclick="toggleEditMode()" id="btn-edit">✎ EDITAR HORARIO</button>
                 <button class="btn btn-green" onclick="openUserModal()">+ PILOTO</button>
-                <button class="btn btn-red" onclick="switchUser()">⇄ CAMBIAR DE USUARIO</button>
+                <button class="btn btn-red" onclick="switchUser()">⇄ CAMBIAR PILOTO / DISPOSITIVO</button>
             </div>
             <div class="warning-stripes" style="margin-bottom:0; margin-top:20px;"></div>
         </div>
@@ -657,7 +663,7 @@
             </div>
             <div class="form-row check-row" style="margin-top:-5px;">
                 <input type="checkbox" id="check-main-user" checked>
-                <label for="check-main-user" style="margin:0;">Marcar como usuario principal</label>
+                <label for="check-main-user" style="margin:0;">Vincular permanentemente a este dispositivo</label>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-green" onclick="saveUser()">✓ CONFIRMAR</button>
@@ -725,6 +731,7 @@
            FIX: localStorage y alert/confirm pueden estar BLOQUEADOS
            en vistas previas / iframes. Ahora todo tiene respaldo. */
         const DB_KEY = 'magi_schedule_db_v1';
+        const DEVICE_USER_KEY = 'magi_device_active_user_v1';
         let memoryFallback = null;
         
         function storageOK() {
@@ -736,6 +743,22 @@
             } catch (e) { return false; }
         }
         const canStore = storageOK();
+        
+        function getDeviceUserId() {
+            try {
+                if (canStore) return window.localStorage.getItem(DEVICE_USER_KEY);
+            } catch (e) {}
+            return null;
+        }
+        
+        function setDeviceUserId(id) {
+            try {
+                if (canStore) {
+                    if (id) window.localStorage.setItem(DEVICE_USER_KEY, id);
+                    else window.localStorage.removeItem(DEVICE_USER_KEY);
+                }
+            } catch (e) {}
+        }
         
         function loadDB() {
             try {
@@ -820,16 +843,12 @@
             if (!db.users || !db.users.length) {
                 const alejandro = createAlejandroUser();
                 db.users = [alejandro];
-                db.identifiedUserId = alejandro.id;
                 saveDB();
             } else if (!db.users.some(u => u.id === 'alejandro')) {
                 const alejandro = createAlejandroUser();
                 db.users.unshift(alejandro);
-                if (!db.identifiedUserId) db.identifiedUserId = alejandro.id;
                 saveDB();
             }
-            if (!db.identifiedUserId) db.identifiedUserId = db.users[0].id;
-            if (!viewingUserId) viewingUserId = db.identifiedUserId;
         }
         
         function defaultSchedule() {
@@ -926,6 +945,18 @@
         
         function renderProfiles() {
             const wrap = document.getElementById('profile-cards');
+            const activeDevId = getDeviceUserId();
+            const btnCancel = document.getElementById('btn-cancel-switch');
+            
+            if (btnCancel) {
+                if (activeDevId && getUser(activeDevId)) {
+                    btnCancel.style.display = 'inline-block';
+                    btnCancel.textContent = `← VOLVER A MI HORARIO (${getUser(activeDevId).name.toUpperCase()})`;
+                } else {
+                    btnCancel.style.display = 'none';
+                }
+            }
+            
             if (!db.users.length) {
                 wrap.innerHTML = '<div class="empty-profiles" style="grid-column:1/-1;">SIN PILOTOS REGISTRADOS · CREE SU PERFIL PARA INICIAR</div>';
                 return;
@@ -935,26 +966,42 @@
                 const u = db.users[i];
                 let total = 0;
                 for (let d = 0; d < days.length; d++) total += (u.schedule[days[d]] || []).length;
-                const isIdent = u.id === db.identifiedUserId;
+                const isIdent = u.id === activeDevId;
                 const theme = EVA_THEMES[u.themeKey] || EVA_THEMES['EVA-01'];
                 html += `
-                    <div class="profile-card theme-card" style="border-color:${theme.primary}; box-shadow: 0 0 18px ${theme.primary}22;" onclick="accessUser('${u.id}')">
-                        ${isIdent ? '<span class="identified-badge">◉ MI PERFIL</span>' : ''}
+                    <div class="profile-card theme-card" style="border-color:${theme.primary}; box-shadow: 0 0 18px ${theme.primary}22;" onclick="accessUser('${u.id}', true)">
+                        ${isIdent ? '<span class="identified-badge">◉ ESTE DISPOSITIVO</span>' : ''}
                         <button class="del-user" onclick="event.stopPropagation(); deleteUser('${u.id}')" title="Eliminar piloto">✕</button>
                         <span class="unit-tag" style="border-color:${theme.accent}; color:${theme.accent};">${escapeHtml(u.unit)}</span>
                         <div class="p-name" style="color:${theme.primary};">${escapeHtml(u.name)}</div>
                         <div class="p-classes" style="color:${theme.accent};">${total} OPERACIONES SEMANALES</div>
+                        <div style="margin-top: 10px; font-size: 10px; color: ${theme.primary}; opacity: 0.85;">▶ TOCAR PARA ASIGNAR A ESTE DISPOSITIVO</div>
                     </div>
                 `;
             }
             wrap.innerHTML = html;
         }
         
-        function accessUser(id) {
+        function accessUser(id, notify = true) {
+            const u = getUser(id);
+            if (!u) return;
+            setDeviceUserId(id);
             db.identifiedUserId = id;
             viewingUserId = id;
             saveDB();
             showMain();
+            if (notify) {
+                showToast(`✓ DISPOSITIVO VINCULADO A: ${u.name.toUpperCase()}`);
+            }
+        }
+        
+        function cancelSwitchUser() {
+            const devId = getDeviceUserId();
+            if (devId && getUser(devId)) {
+                accessUser(devId, false);
+            } else {
+                showToast('⚠ SELECCIONE UN PILOTO', true);
+            }
         }
         
         function deleteUser(id) {
@@ -962,7 +1009,12 @@
             if (!u) return;
             askConfirm(`¿ELIMINAR AL PILOTO "${u.name.toUpperCase()}" Y TODO SU HORARIO?`, function () {
                 db.users = db.users.filter(x => x.id !== id);
-                if (db.identifiedUserId === id) db.identifiedUserId = null;
+                if (getDeviceUserId() === id) {
+                    setDeviceUserId(null);
+                }
+                if (db.identifiedUserId === id) {
+                    db.identifiedUserId = null;
+                }
                 saveDB();
                 renderProfiles();
                 showToast('✓ PILOTO ELIMINADO');
@@ -998,9 +1050,12 @@
         function changeViewUser(id) { viewingUserId = id; renderAll(); }
         
         function backToMyProfile() {
-            viewingUserId = db.identifiedUserId;
-            renderUserSelect();
-            renderAll();
+            const myId = getDeviceUserId() || db.identifiedUserId || (db.users[0] && db.users[0].id);
+            if (myId) {
+                viewingUserId = myId;
+                renderUserSelect();
+                renderAll();
+            }
         }
         
         function toggleEditMode() { editMode = !editMode; renderAll(); }
@@ -1010,10 +1065,13 @@
             if (!user) return;
             applyTheme(user.themeKey || 'EVA-01');
             
-            document.getElementById('user-tag').textContent = `PILOTO: ${user.name.toUpperCase()} · UNIDAD ${user.unit}`;
+            const activeDev = getUser(getDeviceUserId());
+            const devName = activeDev ? activeDev.name.toUpperCase() : 'NO VINCULADO';
+            document.getElementById('user-tag').textContent = `DISPOSITIVO: ${devName} · HORARIO: ${user.name.toUpperCase()} (${user.unit})`;
             
             const banner = document.getElementById('viewing-banner');
-            if (viewingUserId !== db.identifiedUserId) {
+            const myId = getDeviceUserId() || db.identifiedUserId;
+            if (myId && viewingUserId !== myId) {
                 banner.classList.add('show');
                 document.getElementById('viewing-text').textContent = `◈ MODO OBSERVACIÓN: viendo horario de ${user.name.toUpperCase()}`;
             } else {
@@ -1184,18 +1242,17 @@
                 };
                 
                 db.users.push(newUser);
-                if (!db.identifiedUserId || setAsMain) db.identifiedUserId = newUser.id;
                 saveDB();
                 closeUserModal();
                 
                 const inMain = document.getElementById('main-screen').style.display !== 'none';
-                if (inMain) {
+                if (!inMain || setAsMain || !getDeviceUserId()) {
+                    accessUser(newUser.id, true);
+                } else {
                     renderUserSelect();
                     renderAll();
-                } else {
-                    accessUser(newUser.id);
+                    showToast('✓ PILOTO REGISTRADO: ' + name.toUpperCase());
                 }
-                showToast('✓ PILOTO REGISTRADO: ' + name.toUpperCase());
             } catch (e) {
                 showToast('⚠ ERROR AL REGISTRAR: ' + e.message, true);
             }
@@ -1306,10 +1363,11 @@
                 }
             }, 1000);
             
-            if (db.identifiedUserId && getUser(db.identifiedUserId)) {
-                viewingUserId = db.identifiedUserId;
-                showMain();
+            const devId = getDeviceUserId();
+            if (devId && getUser(devId)) {
+                accessUser(devId, false);
             } else {
+                document.getElementById('main-screen').style.display = 'none';
                 document.getElementById('profile-screen').style.display = 'flex';
                 renderProfiles();
             }
